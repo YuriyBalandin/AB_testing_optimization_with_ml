@@ -9,6 +9,10 @@ from typing import List
 import scipy.stats
 import plotly.graph_objects as go
 import plotly.express as px
+from scipy.stats import ttest_ind
+
+from pycaret.regression import setup, compare_models, predict_model
+
 
 
 app = FastAPI()
@@ -231,7 +235,6 @@ async def classic_bootstrap_analysis(df):
     plot_1 = plot_distributions(sample_a, sample_b, 'Control', 'Variant', 'Initial Data Distribution')
     plot_2 = plot_diff_stats(diff_stats, left_bound, right_bound, np.mean(sample_b) - np.mean(sample_a))
 
-    # Note: The plotly figures should be converted to JSON using `.to_json()` method.
     return {
         "initial_data_distribution": plot_1.to_json(),
         "bootstrapped_differences": plot_2.to_json(),
@@ -265,7 +268,6 @@ async def cuped_bootstrap_analysis(df, pre_experiment_data):
     plot_1 = plot_distributions(sample_a, sample_b, 'Control', 'Variant', 'Initial Data Distribution')
     plot_2 = plot_diff_stats(diff_stats, left_bound, right_bound, np.mean(sample_b) - np.mean(sample_a))
 
-    # Note: The plotly figures should be converted to JSON using `.to_json()` method.
     return {
         "initial_data_distribution": plot_1.to_json(),
         "bootstrapped_differences": plot_2.to_json(),
@@ -276,20 +278,67 @@ async def cuped_bootstrap_analysis(df, pre_experiment_data):
         "message": "success result by cuped_bootstrap_analysis"
     }
 
-async def cupac_analysis(df, pre_experiment_data):
-    """
-    TO DO implement CUPAC logic
-    Performs CUPED transformation and classic bootstrap analysis on the processed data and generates necessary plots.
 
-    :param processed_data: Tuple of samples for control and variant groups.
-    :return: Dictionary containing the analysis results and plots.
-    """
-    # apply cuped
-    transformed_data = apply_CUPED(df, pre_experiment_data)
 
-    sample_a, sample_b = preprocess_data(transformed_data)
+
+def train_best_model(df, target_col, session_id=42):
+    """
+    Trains the best model using PyCaret.
+
+    :param df: DataFrame with features and target column.
+    :param target_col: Name of the target column.
+    :param session_id: Random seed for reproducibility.
+    :return: Trained model.
+    """
+    # Setup PyCaret environment
+    reg_setup = setup(data=df, target=target_col, session_id=session_id, verbose=False, html=False, n_jobs=-1)
+
+    # Compare models and select the best one, excluding more complex models
+    best_model = compare_models(exclude=['en', 'lar', 'llar', 'omp', 'br', 'ard', 'par', 'ransac', 'tr', 'huber', 'kr', 'dt', 'rf', 'et', 'ada', 'gbr', 'mlp', 'xgboost', 'lightgbm', 'catboost'])
+    return best_model
+
+
+def apply_cupac(train_df, test_df, target_col, feature_cols):
+    """
+    Applies CUPAC on test data.
+
+    :param train_df: Training DataFrame.
+    :param test_df: Test DataFrame.
+    :param target_col: Name of the target column.
+    :param feature_cols: List of feature column names.
+    :return: Test DataFrame with predictions and residuals added.
+    """
+    # Train the best model
+    best_model = train_best_model(train_df[feature_cols + [target_col]], target_col)
+
+    # Predict on test data
+    test_df['predicted'] = predict_model(best_model, data=test_df[feature_cols])['prediction_label']
+
+    # Compute residuals
+    test_df['residual'] = test_df[target_col] - test_df['predicted']
+
+    return test_df
+
+
+async def cupac_bootstrap_analysis(df, pre_experiment_data):
+    """
+    Performs CUPAC transformation and classic bootstrap analysis on the A/B test data.
+
+    :param df: DataFrame containing the A/B test data.
+    :param pre_experiment_data: DataFrame containing the pre-experiment data for training the CUPAC model.
+    :return: Dictionary containing the analysis results.
+    """
+    # Identifying feature columns in pre_experiment_data
+    feature_cols = [col for col in pre_experiment_data.columns if col.startswith('feature_')]
+
+    # Applying CUPAC
+    df = apply_cupac(pre_experiment_data, df, 'metric_value', feature_cols)
+
+    # Preprocess data for analysis
+    sample_a = np.array(df[df['ab_variant'] == 'control']['residual'])
+    sample_b = np.array(df[df['ab_variant'] == 'test']['residual'])
     print(np.var(sample_a), np.var(sample_b))
-
+    
     # Classic Bootstrap Analysis
     p_value, left_bound, right_bound, diff_stats = classic_bootstrap(sample_a, sample_b)
 
@@ -297,7 +346,6 @@ async def cupac_analysis(df, pre_experiment_data):
     plot_1 = plot_distributions(sample_a, sample_b, 'Control', 'Variant', 'Initial Data Distribution')
     plot_2 = plot_diff_stats(diff_stats, left_bound, right_bound, np.mean(sample_b) - np.mean(sample_a))
 
-    # Note: The plotly figures should be converted to JSON using `.to_json()` method.
     return {
         "initial_data_distribution": plot_1.to_json(),
         "bootstrapped_differences": plot_2.to_json(),
@@ -307,6 +355,8 @@ async def cupac_analysis(df, pre_experiment_data):
         "metric_value_variant": np.mean(sample_b),
         "message": "success result by cuped_bootstrap_analysis"
     }
+
+
 
 @app.post("/upload/")
 async def upload_data(file: UploadFile = File(...), pre_experiment_file: UploadFile = None, method: str = Form(...)):
@@ -316,7 +366,7 @@ async def upload_data(file: UploadFile = File(...), pre_experiment_file: UploadF
     # Read the uploaded file content and convert it into a DataFrame
 
     if method == "classic_bootstrap":
-        
+
         file_content = await file.read()
         df = pd.read_csv(io.BytesIO(file_content))
         print(df.head())
@@ -326,7 +376,6 @@ async def upload_data(file: UploadFile = File(...), pre_experiment_file: UploadF
 
         pre_experiment_file_content = await pre_experiment_file.read()
         pre_experiment_data = pd.read_csv(io.BytesIO(pre_experiment_file_content))
-
 
     # Validate the data structure
     try:
@@ -339,7 +388,7 @@ async def upload_data(file: UploadFile = File(...), pre_experiment_file: UploadF
         return await classic_bootstrap_analysis(df)
     elif method == "cuped_bootstrap":
         return await cuped_bootstrap_analysis(df, pre_experiment_data)
-    elif method == "cupac":
-        return await cupac_analysis(df, pre_experiment_data)
+    elif method == "cupac_bootstrap":
+        return await cupac_bootstrap_analysis(df, pre_experiment_data)
     else:
         raise HTTPException(status_code=400, detail=f"Invalid analysis method selected: {method}")
