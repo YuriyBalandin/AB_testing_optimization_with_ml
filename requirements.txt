@@ -1,0 +1,9 @@
+streamlit
+requests
+plotly
+fastapi
+uvicorn
+pandas
+numpy
+scipy
+pycaret

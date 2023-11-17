@@ -22,3 +22,8 @@
 4. Реализация веб-интерфейса.
 5. Интеграция моделей в веб-интерфейс.
 6. Визуализация результатов.
+
+## Локальный запуск 
+- Установить requirements.txt:  ```pip install -r requirements.txt```
+- В директории backend выполнить: ```uvicorn main:app --reload```
+- В директории frontend выполнить:  ```streamlit run app.py```
