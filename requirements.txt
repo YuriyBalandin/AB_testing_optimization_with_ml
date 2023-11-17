@@ -1,9 +1,9 @@
 streamlit
 requests
 plotly
-json
 fastapi
 uvicorn
 pandas
 numpy
 scipy
+pycaret
